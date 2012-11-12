@@ -1,0 +1,2 @@
+This directory has to exist, this is where AlphDB stores all its data.
+It will not automatically be created, AlphDB will not work without this directory!
