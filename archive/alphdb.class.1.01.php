@@ -13,7 +13,7 @@
  * Anyways, I hope it's helpful.
  * Oh, btw. This is a stackable class. :)
  *
- * @version 1.02
+ * @version 1.01
  * @author Fabian Schneider <Fabi.Schn@gmail.com>
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
@@ -26,7 +26,7 @@ define ('ALPHDB_LOADED', true);
 /**
  * AlphDB Version of this File
  */
-define ('ALPHDB_VERSION', 1.02);
+define ('ALPHDB_VERSION', 1.01);
 
 /**
  * The default path all data will be stored in.
@@ -43,47 +43,6 @@ define ('ALPHDB_DEFAULT_EXT', '.adb');
  * This must be different to ALPHDB_DEFAULT_EXT
  */
 define ('ALPHDB_DEFAULT_EXT2', '.atbl');
-
-/**
- * Default extension for AlphDB User files.
- * This must be unique, again.
- */
-define ('ALPHDB_DEFAULT_EXT3', '.aus');
-
-/**
- * Our constant for read-access.
- */
-define ('ALPHDB_READ', 1);
-
-/**
- * Constant for write-access.
- */
-define ('ALPHDB_WRITE', 2);
-
-/**
- * Remove's access-constant.
- */
-define ('ALPHDB_REMOVE', 3);
-
-/**
- * Our constant for drop-access.
- */
-define ('ALPHDB_DROP', 4);
-
-/**
- * Delete's access-constant.
- */
-define ('ALPHDB_DELETE', 5);
-
-/**
- * Constant for grant-access.
- */
-define ('ALPHDB_GRANT', 6);
-
-/**
- * Our constant for revoke-access.
- */
-define ('ALPHDB_REVOKE', 7);
 
 class AlphDB {
     /**
@@ -141,23 +100,6 @@ class AlphDB {
      */
     private $selected_last = -1;
     
-    /**
-     * @var string The path to the user files (for logins).
-     */
-    private $user_path;
-    
-    /**
-     * @var array An array filled with privileges of current user.
-     */
-    private $user_privileges = array(
-                                     ALPHDB_READ => false,
-                                     ALPHDB_WRITE => false,
-                                     ALPHDB_REMOVE => false,
-                                     ALPHDB_DROP => false,
-                                     ALPHDB_DELETE => false,
-                                     ALPHDB_GRANT => false,
-                                     ALPHDB_REVOKE => false
-                                    );
     
     
     /**
@@ -184,25 +126,14 @@ class AlphDB {
             if (is_readable($this->file)) {
                 $db_base = json_decode(file_get_contents($this->file));
                 if ($this->authenticate($db_base)) {
-                    $this->grant_rights(true);
-                    $this->user_path = $this->db_base = $db_base;
+                    $this->db_base = $db_base;
                     return $this->loaded = true;
-                } else {
-                    $this->user_path = $this->db_path . DIRECTORY_SEPARATOR . 'users' . DIRECTORY_SEPARATOR . $this->db_nick . ALPHDB_DEFAULT_EXT3;
-                    if (file_exists($this->user_path)) {
-                        if (is_readable($this->user_path)) {
-                            $auth = json_decode(file_get_contents($this->user_path));
-                            if ($this->authenticate($auth)) {
-                                $this->grant_rights($auth);
-                                return $this->loaded = true;
-                            }
-                        }
-                        throw new Exception('Could not read User file.');
-                    }
                 }
                 throw new Exception('Could not logon to database. User/Password wrong.');
+                return false;
             } 
             throw new Exception('Database could not be read. Unreadable.');
+            return false;
         }
         
         if (!is_dir($this->db_path)) {
@@ -215,6 +146,7 @@ class AlphDB {
             return $this->load();
         }
         throw new Exception('Database could not be created. Unwriteable.');
+        return false;
     }
     
     /**
@@ -222,63 +154,6 @@ class AlphDB {
      */
     private function authenticate ($db) {
         return (($this->db_nick == $db->user) && ($this->db_pass == $db->pass));
-    }
-    
-    /**
-     * @method object Grants rights to current user (does not write!).
-     */
-    private function grant_rights ($auth) {
-        if ($auth === true) {
-            foreach ($this->user_privileges as $priv => $access) {
-                $this->user_privileges[$priv] = true;
-            }
-        } else {
-            foreach ($this->user_privileges as $priv => $access) {
-                $this->user_privileges[$priv] = (bool) @$auth->rights->{$priv};
-            }
-        }
-        return $this;
-    }
-    
-    /**
-     * @method boolean Checks if current user has $rights.
-     */
-    public function hasRight ($type) {
-        return @$this->user_privileges[$type];
-    }
-    
-    /**
-     * @method boolean See ::hasRight, accepts multiple parameters, however.
-     */
-    public function hasRights () {
-        $rights = func_get_args();
-        foreach ($rights as $right) {
-            if (@!$this->user_privileges[$right])
-                return false;
-        }
-        return true;
-    }
-    
-    /**
-     * @method mixed See ::hasRight(), this is private and throws exceptions.
-     */
-    private function _hasRight ($type) {
-        if (@!$this->user_privileges[$type]) {
-            throw new Exception("Action requires #$type-Rights.");
-        }
-        return true;
-    }
-    
-    /**
-     * @method mixed See ::_hasRight, accepts multiple parameters, however.
-     */
-    private function _hasRights () {
-        $rights = func_get_args();
-        foreach ($rights as $right) {
-            if (@!$this->user_privileges[$right])
-                throw new Exception("Action requires #$right-Rights.");
-        }
-        return true;
     }
     
     /**
@@ -301,8 +176,6 @@ class AlphDB {
     public function select ($table, $passive = false) {
         if (!$this->loaded)
             return $this;
-        if (!$this->hasRight(ALPHDB_READ))
-            return $this;
         $table = $this->mkTbl($table);
         $tb = $this->db_path . $table . ALPHDB_DEFAULT_EXT2;
         if (file_exists($tb)) {
@@ -320,28 +193,15 @@ class AlphDB {
     }
     
     /**
-     * @method object Sort your ::select() call. E.g: $db->select("my_table")->where(array("column1", "value1")) Note that you may also use parameters without arrays. Such as: $db->select("my_table")->where("my_column", "my_value");
+     * @method object Sort your ::select() call. E.g: $db->select("my_table")->where(array("column1", "value1"))
      */
-    public function where () {
+    public function where ($condition) {
         if (!$this->loaded)
             return $this;
         if ($this->selected_last == -1)
             return $this;
-        if (!$this->hasRight(ALPHDB_READ))
-            return $this;
         $new = array();
         $table = $this->fetch();
-        $args = func_get_args();
-        if (sizeof($args) > 1) {
-            $condition = array();
-            for ($n = 0; $n < sizeof($args); $n+=2) {
-                $condition[] = array($args[$n], $args[$n+1]);
-            }
-        } else if (sizeof($args) == 1) {
-            $condition = $args[0];
-        } else {
-            return null;
-        }
         foreach ($table->rows as $row) {
             foreach ($row as $column) {
                 foreach ($condition as $criteria) {
@@ -352,8 +212,7 @@ class AlphDB {
             }
         }
         $table->rows = $new;
-        $this->selected[$this->selected_last] = $table;
-        return $this;
+        return $this->selected[$this->selected_last] = $table;
     }
     
     /**
@@ -363,8 +222,6 @@ class AlphDB {
         if (!$this->loaded)
             return $this;
         if ($this->selected_last == -1)
-            return $this;
-        if (!$this->hasRight(ALPHDB_READ))
             return $this;
         $table = $this->fetch();
         return sizeof($table->rows);
@@ -381,8 +238,6 @@ class AlphDB {
      * @method object Returns the last fetched table or $table. Cannot be called after ::select()
      */
     public function fetch ($table = null) {
-        if (!$this->hasRight(ALPHDB_READ))
-            return $this;
         return $this->loaded ? @$this->selected[($table === null ? $this->selected_last : $table)] : $this;
     }
     
@@ -398,8 +253,6 @@ class AlphDB {
      */
     public function create () {
         if (!$this->loaded)
-            return $this;
-        if (!$this->hasRight(ALPHDB_WRITE))
             return $this;
         $args = func_get_args();
         if (sizeof($args) < 2) {
@@ -429,8 +282,6 @@ class AlphDB {
     public function insert ($table, $row) {
         if (!$this->loaded)
             return $this;
-        if (!$this->hasRight(ALPHDB_WRITE))
-            return $this;
         $table = $this->mkTbl($table);
         $tbd = $this->db_path . $table . ALPHDB_DEFAULT_EXT2;
         $this->select($table, true);
@@ -454,8 +305,6 @@ class AlphDB {
     public function truncate ($table) {
         if (!$this->loaded)
             return $this;
-        if (!$this->hasRight(ALPHDB_REMOVE))
-            return $this;
         $table = $this->mkTbl($table);
         $tbd = $this->db_path . $table . ALPHDB_DEFAULT_EXT2;
         $this->select($table, true);
@@ -473,8 +322,6 @@ class AlphDB {
      */
     public function remove ($table, $criteria) {
         if (!$this->loaded)
-            return $this;
-        if (!$this->hasRight(ALPHDB_REMOVE))
             return $this;
         $table = $this->mkTbl($table);
         $tbd = $this->db_path . $table . ALPHDB_DEFAULT_EXT2;
@@ -506,8 +353,6 @@ class AlphDB {
     public function drop ($table) {
         if (!$this->loaded)
             return $this;
-        if (!$this->hasRight(ALPHDB_DROP))
-            return $this;
         $table = $this->mkTbl($table);
         $tb = $this->db_path . $table . ALPHDB_DEFAULT_EXT2;
         if (file_exists($tb))
@@ -521,8 +366,6 @@ class AlphDB {
      */
     public function delete () {
         if (!$this->loaded)
-            return $this;
-        if (!$this->hasRight(ALPHDB_DELETE))
             return $this;
         $dir = $this->db_path;
         $this->rrmdir($dir);
