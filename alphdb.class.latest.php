@@ -108,6 +108,16 @@ define ('ALPHDB_USER_ADD', 8);
  */
 define ('ALPHDB_USER_REMOVE', 9);
 
+/**
+ * Constant for adding group-access.
+ */
+define ('ALPHDB_GROUP_ADD', 10);
+
+/**
+ * Removing a group's access constant.
+ */
+define ('ALPHDB_GROUP_REMOVE', 11);
+
 class AlphDB {
     /**
      * @var boolean Nothing will work without this. See ::load()
@@ -191,7 +201,9 @@ class AlphDB {
                                      ALPHDB_GRANT => false,
                                      ALPHDB_REVOKE => false,
                                      ALPHDB_USER_ADD => false,
-                                     ALPHDB_USER_REMOVE => false
+                                     ALPHDB_USER_REMOVE => false,
+                                     ALPHDB_GROUP_ADD => false,
+                                     ALPHDB_GROUP_REMOVE => false
                                     );
     
     
@@ -215,7 +227,7 @@ class AlphDB {
         $this->db_path = $this->path . $this->db_crypt_name . DIRECTORY_SEPARATOR;
         $this->file = $this->db_path . $this->db_crypt_name . ALPHDB_DEFAULT_EXT;
         $this->users_path = $this->db_path . 'users' . DIRECTORY_SEPARATOR;
-        $this->groups_path => $this->db_path . 'groups' . DIRECTORY_SEPARATOR;
+        $this->groups_path = $this->db_path . 'groups' . DIRECTORY_SEPARATOR;
         
         if (file_exists($this->file)) {
             if (is_readable($this->file)) {
@@ -316,6 +328,32 @@ class AlphDB {
         if (!$group = file_get_contents($file))
             throw new Exception("Could not read group $id.");
         return json_decode($group);
+    }
+    
+    /**
+     * @method object Adds a new Group called $id with $access.
+     */
+    public function addGroup ($id, $access) {
+        if (!$this->loaded || !$this->hasRight(ALPHDB_GROUP_ADD))
+            return $this;
+        $hid = md5($id);
+        $file = $this->groups_path . $hid . ALPHDB_DEFAULT_EXT4;
+        if (file_exists($file))
+            throw new Exception("Group $id does already exist in currently selected database.");
+        $rights = array();
+        foreach ($this->user_privileges as $priv => $accs) {
+            if (!empty($access[$priv])) {
+                $rights[$priv] = $access[$priv];
+            } else {
+                $rights[$priv] = $accs;
+            }
+        }
+        $group = array();
+        $group['name'] = $id;
+        $group['rights'] = $rights;
+        if (!file_put_contents($file, json_encode($group)))
+            throw new Exception("Group $id could not be created. Unwriteable.");
+        return $this;
     }
     
     /**
@@ -449,29 +487,76 @@ class AlphDB {
     }
     
     /**
-     * @method object Sort your ::select() call by $constraints. Note: this also uses ORs. Make consecutive ::wereConst()s for ANDs.
+     * @method object Sort your ::select() call by $constraints. Note: this also uses ORs. Make consecutive ::wereConst()s for ANDs. Constraints: >, <, =, !=, IN [], NOTIN [] Note that strings must be enquoted!
      */
     public function whereConst ($constraints) {
         if (!$this->loaded || $this->selected_last == -1 || !$this->hasRight(ALPHDB_READ))
             return $this;
         $new = array();
         $table = $this->fetch();
-        $temp = explode(';', $constraints);
-        $matches = array();
-        foreach ($temp as $condition) {
-            preg_match('/(.+)[\t| ]+(IN|<|=|>|!)[\t| ]+([0-9]+|\[.+\]|.+)/', $condition, $matches[]);
-        }
-        foreach ($matches as $match) {
-            if ($match[2] == 'IN') {
-                preg_match('/(?:([0-9]+|".+"|\'.+\'))/', substr($match[3], 1, -1), $tempm);
-                print_r($tempm);
+        preg_match_all('/(\w+)[\t ]+(IN|<|>|=|!=|NOTIN)[\t ]+((\'[^\']*\'|"[^"]*"|\d+)|\[[\t ]*(?4)(?:[\t ]*,[\t ]*(?4))*[\t ]*\])/', $constraints, $matches);
+        for ($n = 0; $n < count($matches[1]); $n++) {
+            $column = $matches[1][$n];
+            $constraint = $matches[2][$n];
+            $condition = $matches[3][$n];
+            
+            foreach ($table->rows as $row) {
+                foreach ($row as $col) {
+                    switch ($constraint) {
+                        case '<': {
+                            if (@intval($col->{$column}) < intval($condition)) {
+                                $new[] = $row;
+                            }
+                        } break;
+                        case '>': {
+                            if (@intval($col->{$column}) > intval($condition)) {
+                                $new[] = $row;
+                            }
+                        } break;
+                        case '=': {
+                            $condition = (in_array(substr($condition, 0, 1), array('"', "'")) && in_array(substr($condition, -1, 1), array('"', "'")) ? substr($condition, 1, -1) : intval($condition));
+                            if (@$col->{$column} === $condition) {
+                                $new[] = $row;
+                            }
+                        } break;
+                        case '!=': {
+                            $condition = (in_array(substr($condition, 0, 1), array('"', "'")) && in_array(substr($condition, -1, 1), array('"', "'")) ? substr($condition, 1, -1) : intval($condition));
+                            if (@$col->{$column} !== $condition) {
+                                $new[] = $row;
+                            }
+                        } break;
+                        case 'IN': {
+                            $string = substr($condition, 1, -1);
+                            preg_match_all('/([0-9]+|"[^"]*"|\'[^\']*\')/', $string, $nmatches);
+                            $clean = array();
+                            foreach($nmatches as $arr) {
+                                foreach ($arr as $val) {
+                                    $clean[] = (in_array(substr($val, 0, 1), array('"', "'")) && in_array(substr($val, -1, 1), array('"', "'")) ? substr($val, 1, -1) : intval($val));
+                                }
+                            }
+                            if (in_array(@$col->{$column}, $clean)) {
+                                $new[] = $row;
+                            }
+                        } break;
+                        case 'NOTIN': {
+                            $string = substr($condition, 1, -1);
+                            preg_match_all('/([0-9]+|"[^"]*"|\'[^\']*\')/', $string, $nmatches);
+                            $clean = array();
+                            foreach($nmatches as $arr) {
+                                foreach ($arr as $val) {
+                                    $clean[] = (in_array(substr($val, 0, 1), array('"', "'")) && in_array(substr($val, -1, 1), array('"', "'")) ? substr($val, 1, -1) : intval($val));
+                                }
+                            }
+                            if (!in_array(@$col->{$column}, $clean)) {
+                                $new[] = $row;
+                            }
+                        } break;
+                    }
+                }
             }
         }
-        foreach ($table->rows as $row) {
-            foreach ($row as $column) {
-                
-            }
-        }
+        $table->rows = $new;
+        $this->selected[$this->selected_last] = $table;
         return $this;
     }
     
